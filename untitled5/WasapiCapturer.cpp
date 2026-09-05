@@ -41,10 +41,9 @@ void WasapiCapturer::cleanup() {
 QList<AudioDeviceInfo> WasapiCapturer::getAvailableDevices(DeviceType type) {
     QList<AudioDeviceInfo> list;
 
-    // 【核心修复】必须使用 CoInitialize(nullptr) (STA)
-    // 之前使用 CoInitializeEx(MTA) 会导致 Qt 主线程崩溃
-    HRESULT hrInit = CoInitialize(nullptr);
-
+    // 所在线程的 COM 模式已由 Qt/系统设定（主线程为 STA），显式再次
+    // CoInitialize 会返回 "Cannot change thread mode after it is set."，
+    // 因此不再初始化，直接使用 COM 接口。
     ComPtr<IMMDeviceEnumerator> enumerator;
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
 
@@ -78,9 +77,6 @@ QList<AudioDeviceInfo> WasapiCapturer::getAvailableDevices(DeviceType type) {
         }
     }
 
-    if (SUCCEEDED(hrInit)) {
-        CoUninitialize();
-    }
     return list;
 }
 
@@ -122,13 +118,12 @@ bool WasapiCapturer::initCapture() {
 }
 
 void WasapiCapturer::run() {
-    // 线程内初始化 STA 是安全的
-    CoInitialize(nullptr);
+    // 不在此显式 CoInitialize：线程模式冲突时 Windows 会返回
+    // RPC_E_CHANGED_MODE，WASAPI 依赖系统隐式初始化即可工作。
 
     if (!initCapture()) {
         emit errorOccurred("Failed to initialize WASAPI");
         cleanup();
-        CoUninitialize();
         return;
     }
 
@@ -204,6 +199,5 @@ void WasapiCapturer::run() {
 
     m_audioClient->Stop();
     cleanup();
-    CoUninitialize();
     qDebug() << "[Wasapi] Stopped.";
 }

@@ -36,18 +36,14 @@ void SystemController::initialize() {
     connect(bus, &EventBus::cmd_toggleRecording, this, &SystemController::onToggleRecording);
     connect(bus, &EventBus::cmd_updateConfig, this, &SystemController::onUpdateConfig);
     connect(bus, &EventBus::cmd_refreshDevices, this, &SystemController::onRefreshDevices);
-    // 摄像头枚举请求：必须在 MTA 的捕获线程上执行 QMediaDevices::videoInputs()。
-    // Qt GUI 主线程是 STA（Qt 内部 OleInitialize 固定），Media Foundation 在该
-    // 线程上尝试 CoInitializeEx(COINIT_MULTITHREADED) 会返回 RPC_E_CHANGED_MODE，
+    // 摄像头枚举请求：直接在 Qt 主线程上执行 QMediaDevices::videoInputs()。
+    // 【重要】不要把它投递到捕获线程：Qt 6.7 在 Windows 上首次使用 QMediaDevices
+    // 会构造 QWindowsMediaDevices，其内部 QComHelper 以 STA 初始化 COM；而捕获
+    // 线程已被 RoInitialize(MTA)（WinRTCamera/WGC 需要），STA 请求在 MTA 线程会
     // 打印 "Failed to initialize COM library (Cannot change thread mode after it
-    // is set.)"。捕获线程在 startVideoThread 中已由 RoInitialize(MTA) 初始化，
-    // 与 prewarmAllCameras 同理。结果以 QVariant 回传，跨线程 Queued 投递安全。
-    connect(bus, &EventBus::cmd_requestCameraList, this, [this, bus]() {
-        QObject* capturer = m_capturer;
-        if (!capturer) { bus->fireCameraListReady(QVariant()); return; }
-        QMetaObject::invokeMethod(capturer, [bus]() {
-            bus->fireCameraListReady(QVariant::fromValue(QMediaDevices::videoInputs()));
-        });
+    // is set.)"。主线程由 Qt 管理（STA/中性），是 QMediaDevices 的标准运行环境。
+    connect(bus, &EventBus::cmd_requestCameraList, this, [bus]() {
+        bus->fireCameraListReady(QVariant::fromValue(QMediaDevices::videoInputs()));
     });
     connect(bus, &EventBus::cmd_takeSnapshot, this, &SystemController::onTakeSnapshot);
     connect(bus, &EventBus::cmd_changeAudioDevice, this, &SystemController::onChangeAudioDevice);
@@ -91,6 +87,9 @@ void SystemController::startVideoThread() {
 
     // 线程启动时初始化捕获器
     connect(m_videoThread, &QThread::started, m_capturer, [this]() {
+        // 捕获线程必须保持 MTA：WinRTCamera / WgcCapturer（WinRT MediaCapture /
+        // Windows.Graphics.Capture）依赖它。QMediaDevices 枚举则不能在本线程执行
+        // （其内部以 STA 初始化 COM），见 initialize() 中的说明。
         HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
         if (FAILED(hr)) CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (m_capturer->init()) {
@@ -138,8 +137,11 @@ void SystemController::onCapturerInitFinished(bool success) {
 
 void SystemController::prewarmAllCameras() {
     if (!m_capturer) return;
-    QMetaObject::invokeMethod(m_capturer, [this]() {
-        const auto cameras = QMediaDevices::videoInputs();
+    // 枚举在主线程执行（QMediaDevices 需要 STA/中性线程，见 initialize() 注释），
+    // 摄像头对象的创建/启动再投递到捕获线程（需要访问其 D3D 设备，且该线程保持
+    // MTA 供 WinRT MediaCapture 使用）。
+    const auto cameras = QMediaDevices::videoInputs();
+    QMetaObject::invokeMethod(m_capturer, [this, cameras]() {
         ID3D11Device* rawDevice = m_capturer->getD3DDevice();
         if (!rawDevice) return;
         QMutexLocker locker(&m_poolMutex);

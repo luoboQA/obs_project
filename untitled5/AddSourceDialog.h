@@ -31,10 +31,10 @@ public:
         resize(400, 300);
         setupUI();
 
-        // 摄像头列表由 SystemController 转发到捕获线程(MTA)异步枚举后回传
+        // 摄像头列表由 SystemController 在 Qt 主线程枚举后经事件总线异步回传
         // （cmd_requestCameraList / state_cameraListReady）。
-        // 原因：Qt 主线程是 STA，若在此直接调用 QMediaDevices::videoInputs()，
-        // Media Foundation 尝试把线程改为 MTA 会失败并打印
+        // 不要自行调用 QMediaDevices::videoInputs()：Qt 6.7 Windows 的
+        // QWindowsMediaDevices 以 STA 初始化 COM，若在 MTA 线程（捕获线程）调用会打印
         // "Failed to initialize COM library (Cannot change thread mode after it is set.)"
         connect(EventBus::instance(), &EventBus::state_cameraListReady, this, [this](const QVariant& cams) {
             const auto cameras = cams.value<QList<QCameraDevice>>();
