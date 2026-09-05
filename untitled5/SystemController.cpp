@@ -36,6 +36,19 @@ void SystemController::initialize() {
     connect(bus, &EventBus::cmd_toggleRecording, this, &SystemController::onToggleRecording);
     connect(bus, &EventBus::cmd_updateConfig, this, &SystemController::onUpdateConfig);
     connect(bus, &EventBus::cmd_refreshDevices, this, &SystemController::onRefreshDevices);
+    // 摄像头枚举请求：必须在 MTA 的捕获线程上执行 QMediaDevices::videoInputs()。
+    // Qt GUI 主线程是 STA（Qt 内部 OleInitialize 固定），Media Foundation 在该
+    // 线程上尝试 CoInitializeEx(COINIT_MULTITHREADED) 会返回 RPC_E_CHANGED_MODE，
+    // 打印 "Failed to initialize COM library (Cannot change thread mode after it
+    // is set.)"。捕获线程在 startVideoThread 中已由 RoInitialize(MTA) 初始化，
+    // 与 prewarmAllCameras 同理。结果以 QVariant 回传，跨线程 Queued 投递安全。
+    connect(bus, &EventBus::cmd_requestCameraList, this, [this, bus]() {
+        QObject* capturer = m_capturer;
+        if (!capturer) { bus->fireCameraListReady(QVariant()); return; }
+        QMetaObject::invokeMethod(capturer, [bus]() {
+            bus->fireCameraListReady(QVariant::fromValue(QMediaDevices::videoInputs()));
+        });
+    });
     connect(bus, &EventBus::cmd_takeSnapshot, this, &SystemController::onTakeSnapshot);
     connect(bus, &EventBus::cmd_changeAudioDevice, this, &SystemController::onChangeAudioDevice);
     connect(bus, &EventBus::cmd_uiFrameProcessed, this, &SystemController::onUiFrameProcessed);

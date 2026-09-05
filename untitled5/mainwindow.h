@@ -42,7 +42,7 @@ private slots:
     // Layer List Slots
     void onLayerSelectionChanged();
     void onBtnLayerUpClicked();
-    void onBtnLayerDownClicked();
+    void onBtnLayerDownClicked(); 
     void onBtnLayerDelClicked();
     void onBtnAddSourceClicked();
 

@@ -27,6 +27,7 @@ public:
     void sendCommandSnapshot() { emit cmd_takeSnapshot(); }
     void sendCommandChangeAudioDevice(bool isMic, const QString& deviceId) { emit cmd_changeAudioDevice(isMic, deviceId); }
     void sendCommandToggleMicCapture(bool active) { emit cmd_toggleMicCapture(active); }
+    void sendCommandRequestCameraList() { emit cmd_requestCameraList(); }
     void sendUiFrameProcessed() { emit cmd_uiFrameProcessed(); }
     void sendOverlayGeometryChanged(int id, const QRect& rect) { emit cmd_overlayGeometryChanged(id, rect); }
 
@@ -41,6 +42,7 @@ public:
     void fireSnapshotTaken(const QString& path) { emit state_snapshotTaken(path); }
     void fireError(const QString& msg) { emit state_error(msg); }
     void fireCameraAdded(int id, const QRect& rect) { emit state_cameraAdded(id, rect); }
+    void fireCameraListReady(const QVariant& cams) { emit state_cameraListReady(cams); }
 
 signals:
     // Commands
@@ -56,6 +58,7 @@ signals:
     void cmd_overlayGeometryChanged(int id, QRect rect);
     void cmd_removeOverlay(int id);
     void cmd_updateRenderOrder(QList<int> order);
+    void cmd_requestCameraList();
 
     // Data
     void data_previewFrame(QImage img);
@@ -70,6 +73,7 @@ signals:
     void state_snapshotTaken(QString path);
     void state_error(QString msg);
     void state_cameraAdded(int id, QRect rect);
+    void state_cameraListReady(QVariant cams);
 
 };
 
