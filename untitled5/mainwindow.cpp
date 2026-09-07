@@ -78,6 +78,9 @@ void MainWindow::setupUi() {
     setupTitleBar(rootLayout);
 
     QWidget* contentWidget = new QWidget();
+    // 开启跟踪：未按下鼠标时悬停也能产生 MouseMove 并冒泡到 FramelessWidget，
+    // 否则边缘缩放光标只在点击/拖动后才更新（不实时）
+    contentWidget->setMouseTracking(true);
     rootLayout->addWidget(contentWidget);
 
     QVBoxLayout* mainVLayout = new QVBoxLayout(contentWidget);
@@ -372,6 +375,8 @@ void MainWindow::setupTitleBar(QVBoxLayout* rootLayout) {
     m_titleBarWidget = new QWidget();
     m_titleBarWidget->setFixedHeight(40);
     m_titleBarWidget->setStyleSheet("background-color: #1f1f1f; border-bottom: 1px solid #333;");
+    // 同上：标题栏顶层 6px 属于窗口边缘，需悬停实时冒泡 MouseMove 以切换 Top/TopLeft/TopRight 缩放光标
+    m_titleBarWidget->setMouseTracking(true);
     QHBoxLayout *header = new QHBoxLayout(m_titleBarWidget);
     header->setContentsMargins(15, 0, 5, 0);
     m_lblTitle = new QLabel("OBS Studio (Qt Enterprise Edition)");
