@@ -131,6 +131,7 @@ private:
         p.end();
 
         setPixmap(pix);
+        setRect(QRectF(0, 0, pix.width(), pix.height()));
     }
 
 private:
