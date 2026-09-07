@@ -226,7 +226,7 @@ UI 上每张图/文字/摄像头都是一个 `ResizablePixmapItem`（可拖、�
 
 1. **启动 MediaMTX**（默认监听 RTMP `:1935`）。
 2. **设置里填推流参数**（SettingsDialog → 保存 → `onUpdateConfig`）：
-   - 推流地址：`/`
+   - 推流地址：`rtmp://127.0.0.1:1935`
    - 流名（streamKey）：`stream`
    - **勾选"开启直播"**——`RecorderConfig.h` 中 `enableStreaming` 默认是 `false`，不勾选就只录本地文件
    - 想"只推流不录文件"：把本地录制关掉（`enableFileRecord = false`）
