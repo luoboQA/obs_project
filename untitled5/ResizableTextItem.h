@@ -81,7 +81,7 @@ public:
     {
         m_font.setFamily("Arial");
         m_font.setBold(true);
-        m_font.setPixelSize(64); // 默认高清大字体，缩放后清晰
+        m_font.setPixelSize(128); // 默认高清大字体，缩放后清晰
         m_color = Qt::white;
         m_hasShadow = true;
         regeneratePixmap();

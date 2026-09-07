@@ -208,6 +208,8 @@ void MainWindow::onBtnAddSourceClicked() {
                 addLayerToList(id, QFileInfo(sel.imagePath).fileName(), "[IMG]");
 
                 connect(item, &ResizablePixmapItem::geometryChanged, this, &MainWindow::onItemGeometryChanged);
+                // 双击图片 → 弹出选图对话框进行原位替换（仅图片源连接，摄像头不响应）
+                connect(item, &ResizablePixmapItem::doubleClicked, this, &MainWindow::onReplaceImageRequested);
 
                 // 创建时必须立即发送几何信息和像素数据
                 EventBus::instance()->sendOverlayGeometryChanged(id, QRect(50, 50, pix.width(), pix.height()));
@@ -243,6 +245,36 @@ void MainWindow::onBtnAddSourceClicked() {
         }
 
         updateZOrder();
+    }
+}
+
+// 双击图片：弹出 AddSourceDialog（替换模式），重新选择图片并原位替换
+void MainWindow::onReplaceImageRequested(int id) {
+    AddSourceDialog dlg(this, /*replaceMode=*/true);
+    if (dlg.exec() != QDialog::Accepted) return;
+    SourceSelection sel = dlg.getSelection();
+    if (sel.imagePath.isEmpty()) return;
+
+    QPixmap pix(sel.imagePath);
+    if (pix.isNull()) {
+        EventBus::instance()->fireError(QString("Failed to load image: %1").arg(sel.imagePath));
+        return;
+    }
+    ResizablePixmapItem *item = m_overlayItems.value(id, nullptr);
+    if (!item) return;
+
+    // 保留当前的位置和大小，仅替换像素内容
+    item->setPixmap(pix);
+    // 通知后台/录制端更新纹理
+    EventBus::instance()->fireOverlayUpdate(id, pix.toImage());
+
+    // 同步更新右侧图层列表中的文件名
+    for (int i = 0; i < m_layerList->count(); ++i) {
+        QListWidgetItem *li = m_layerList->item(i);
+        if (li->data(Qt::UserRole).toInt() == id) {
+            li->setText(QString("[IMG] %1").arg(QFileInfo(sel.imagePath).fileName()));
+            break;
+        }
     }
 }
 

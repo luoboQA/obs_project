@@ -103,6 +103,12 @@ void ResizablePixmapItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event) {
     m_isResizing = false; hideGuideLines(); QGraphicsObject::mouseReleaseEvent(event);
 }
 
+void ResizablePixmapItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) {
+    // 交给 MainWindow 决定（例如弹出选择图片对话框进行替换）
+    emit doubleClicked(m_id);
+    event->accept();
+}
+
 QVariant ResizablePixmapItem::itemChange(GraphicsItemChange change, const QVariant &value)
 {
     if (change == ItemPositionChange && scene()) {

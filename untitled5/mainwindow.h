@@ -45,6 +45,7 @@ private slots:
     void onBtnLayerDownClicked(); 
     void onBtnLayerDelClicked();
     void onBtnAddSourceClicked();
+    void onReplaceImageRequested(int id); // 双击图片：重新选择图片替换
 
     // EventBus Slots
     void updatePreview(QImage img);

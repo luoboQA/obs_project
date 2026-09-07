@@ -26,9 +26,10 @@ struct SourceSelection {
 class AddSourceDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit AddSourceDialog(QWidget *parent = nullptr) : QDialog(parent) {
-        setWindowTitle("Add Sources");
-        resize(400, 300);
+    explicit AddSourceDialog(QWidget *parent = nullptr, bool replaceMode = false)
+        : QDialog(parent), m_replaceMode(replaceMode) {
+        setWindowTitle(replaceMode ? "Replace Image" : "Add Sources");
+        resize(400, replaceMode ? 160 : 300);
         setupUI();
 
         // 摄像头列表由 SystemController 在 Qt 主线程枚举后经事件总线异步回传
@@ -36,13 +37,16 @@ public:
         // 不要自行调用 QMediaDevices::videoInputs()：Qt 6.7 Windows 的
         // QWindowsMediaDevices 以 STA 初始化 COM，若在 MTA 线程（捕获线程）调用会打印
         // "Failed to initialize COM library (Cannot change thread mode after it is set.)"
-        connect(EventBus::instance(), &EventBus::state_cameraListReady, this, [this](const QVariant& cams) {
-            const auto cameras = cams.value<QList<QCameraDevice>>();
-            for (const auto& c : cameras) {
-                comboCam->addItem(c.description(), QVariant::fromValue(c));
-            }
-        });
-        EventBus::instance()->sendCommandRequestCameraList();
+        // 替换模式下不显示摄像头分组，无需枚举
+        if (!replaceMode) {
+            connect(EventBus::instance(), &EventBus::state_cameraListReady, this, [this](const QVariant& cams) {
+                const auto cameras = cams.value<QList<QCameraDevice>>();
+                for (const auto& c : cameras) {
+                    comboCam->addItem(c.description(), QVariant::fromValue(c));
+                }
+            });
+            EventBus::instance()->sendCommandRequestCameraList();
+        }
     }
 
     SourceSelection getSelection() const { return m_selection; }
@@ -62,10 +66,7 @@ private:
         layout->addWidget(grpImg);
 
         connect(chkImage, &QCheckBox::toggled, btnSelectImg, &QPushButton::setEnabled);
-        connect(btnSelectImg, &QPushButton::clicked, this, [this](){
-            QString path = QFileDialog::getOpenFileName(this, "Select Image", "", "Images (*.png *.jpg *.jpeg)");
-            if(!path.isEmpty()) { m_selection.imagePath = path; btnSelectImg->setText(path); }
-        });
+        // btnSelectImg 的点击连接在按钮行创建后再建立（替换模式需要引用 OK 按钮）
 
         // --- 2. Text Section ---
         QGroupBox *grpText = new QGroupBox("Text Source");
@@ -94,11 +95,38 @@ private:
 
         connect(chkCam, &QCheckBox::toggled, comboCam, &QComboBox::setEnabled);
 
+        // 替换模式：仅保留"重新选择图片文件"功能，隐藏复选框与文字/摄像头分组
+        if (m_replaceMode) {
+            grpImg->setTitle("Replace Image");
+            chkImage->hide();
+            chkImage->setChecked(true);
+            btnSelectImg->setEnabled(true);
+            grpText->hide();
+            grpCam->hide();
+        }
+
         // --- Buttons ---
         QDialogButtonBox *bbox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         layout->addWidget(bbox);
+        if (m_replaceMode) bbox->button(QDialogButtonBox::Ok)->setEnabled(false);
+
+        connect(btnSelectImg, &QPushButton::clicked, this, [this, bbox](){
+            QString path = QFileDialog::getOpenFileName(this, "Select Image", "", "Images (*.png *.jpg *.jpeg)");
+            if(!path.isEmpty()) {
+                m_selection.imagePath = path;
+                btnSelectImg->setText(path);
+                // 替换模式下：选好文件后才允许点 OK
+                if (m_replaceMode) bbox->button(QDialogButtonBox::Ok)->setEnabled(true);
+            }
+        });
 
         connect(bbox, &QDialogButtonBox::accepted, this, [this](){
+            if (m_replaceMode) {
+                if (m_selection.imagePath.isEmpty()) return; // 防御：未选文件时 OK 不可点
+                m_selection.addImage = true;
+                accept();
+                return;
+            }
             if(chkImage->isChecked()) m_selection.addImage = true;
             if(chkText->isChecked()) { m_selection.addText = true; m_selection.textContent = editText->text(); }
             if(chkCam->isChecked()) { m_selection.addCamera = true; m_selection.cameraDevice = comboCam->currentData(); }
@@ -112,6 +140,7 @@ private:
     QLineEdit *editText;
     QComboBox *comboCam;
     SourceSelection m_selection;
+    bool m_replaceMode = false;
 };
 
 #endif // ADDSOURCEDIALOG_H

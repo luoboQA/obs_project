@@ -24,12 +24,15 @@ public:
 
 signals:
     void geometryChanged(int id, QRect rect);
+    // 双击图层（图片替换等用途由 MainWindow 响应）
+    void doubleClicked(int id);
 
 protected:
     void hoverMoveEvent(QGraphicsSceneHoverEvent *event) override;
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override;
+    void mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event) override;
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
 
 private:
