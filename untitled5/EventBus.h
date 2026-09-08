@@ -30,6 +30,8 @@ public:
     void sendCommandRequestCameraList() { emit cmd_requestCameraList(); }
     void sendUiFrameProcessed() { emit cmd_uiFrameProcessed(); }
     void sendOverlayGeometryChanged(int id, const QRect& rect) { emit cmd_overlayGeometryChanged(id, rect); }
+    // 在合成器注册一个图片/文字图层(先建条目,后续 updateOverlayImage 填充内容)
+    void sendCommandAddOverlay(int id, const QRect& rect) { emit cmd_addOverlay(id, rect); }
 
     // --- Events (Controller -> View) ---
     void firePreviewFrame(const QImage& img) { emit data_previewFrame(img); }
@@ -58,6 +60,7 @@ signals:
     void cmd_overlayGeometryChanged(int id, QRect rect);
     void cmd_removeOverlay(int id);
     void cmd_updateRenderOrder(QList<int> order);
+    void cmd_addOverlay(int id, QRect rect);
     void cmd_requestCameraList();
 
     // Data

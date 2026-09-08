@@ -2,6 +2,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <QDebug>
 #include <QtConcurrent>
+#include <cstring>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.MediaProperties.h>
 #include <winrt/Windows.Graphics.Imaging.h>
@@ -143,7 +144,8 @@ bool WinRTCamera::start(const QString& deviceId) {
         auto impl = m_impl; // shared_ptr 拷贝：延长状态对象生命周期到回调结束
         m_frameToken = m_frameReader.FrameArrived([impl](MediaFrameReader const& sender, MediaFrameArrivedEventArgs const&) {
             if (impl->closed) return; // 已停止，忽略迟到事件（原子快速路径）
-            int c = ++impl->frameCount;
+            // 上传成功后才 ++frameCount(见下方),这里只读预估值用于首次上传调试提示
+            int c = impl->frameCount.load(std::memory_order_relaxed) + 1;
 
             try {
                 auto frameRef = sender.TryAcquireLatestFrame();
@@ -219,6 +221,8 @@ bool WinRTCamera::start(const QString& deviceId) {
                     // BGRA8 的 Pitch 固定为 Width * 4
                     int rowPitch = w * 4;
                     impl->context->UpdateSubresource(impl->copyTexture.Get(), 0, nullptr, pData, rowPitch, 0);
+                    // 上传成功后才递增计数:readLatestFrame 看到计数变化即代表新内容已就绪
+                    ++impl->frameCount;
                 }
 
             } catch (...) {}
@@ -248,6 +252,7 @@ void WinRTCamera::stop() {
         m_impl->closed = true;
         m_impl->copyTexture.Reset();
         m_impl->currentSRV.Reset();
+        m_impl->staging.Reset();
     }
     // 2) 注销回调并关闭 reader/capture。注意不持有 impl->mutex 做这些调用，
     //    避免与 MediaFrameReader 事件派发线程（可能持事件锁再进入回调）构成
@@ -266,4 +271,48 @@ void WinRTCamera::stop() {
 ComPtr<ID3D11ShaderResourceView> WinRTCamera::getLatestFrame() {
     QMutexLocker locker(&m_impl->mutex);
     return m_impl->currentSRV; // ComPtr 拷贝：返回后即使被 Reset 也仍持有引用
+}
+
+bool WinRTCamera::readLatestFrame(QImage& out) {
+    // 全程持 impl->mutex:与 FrameArrived 上传回调、stop() 的纹理复位互斥,
+    // 保证 CopyResource 期间 copyTexture 内容不会被并发改写。
+    QMutexLocker locker(&m_impl->mutex);
+    if (m_impl->closed || !m_impl->copyTexture || !m_impl->context) return false;
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    m_impl->copyTexture->GetDesc(&desc);
+    if (desc.Width == 0 || desc.Height == 0) return false;
+
+    auto ensureStaging = [&]() -> bool {
+        if (m_impl->staging) {
+            D3D11_TEXTURE2D_DESC sd;
+            m_impl->staging->GetDesc(&sd);
+            if (sd.Width == desc.Width && sd.Height == desc.Height && sd.Format == desc.Format) return true;
+            m_impl->staging.Reset(); // 尺寸/格式变了(协商重开),重建
+        }
+        D3D11_TEXTURE2D_DESC stageDesc = desc;
+        stageDesc.Usage = D3D11_USAGE_STAGING;
+        stageDesc.BindFlags = 0;
+        stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stageDesc.MiscFlags = 0;
+        return SUCCEEDED(m_impl->device->CreateTexture2D(&stageDesc, nullptr, m_impl->staging.ReleaseAndGetAddressOf()));
+    };
+    if (!ensureStaging()) return false;
+
+    // 同一 immediate context 上 CopyResource 后 Map(READ) 会隐式同步,无需显式 Flush
+    m_impl->context->CopyResource(m_impl->staging.Get(), m_impl->copyTexture.Get());
+    D3D11_MAPPED_SUBRESOURCE map = {};
+    if (FAILED(m_impl->context->Map(m_impl->staging.Get(), 0, D3D11_MAP_READ, 0, &map)) || !map.pData) return false;
+
+    int w = (int)desc.Width, h = (int)desc.Height;
+    // 字节序假设与 DxGiCapturer 合成帧读回一致:B8G8R8A8_UNORM 内存序 ==
+    // QImage::Format_ARGB32_Premultiplied 小端(B,G,R,A);该格式 bytesPerLine 恒为 w*4。
+    QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
+    const uchar* src = (const uchar*)map.pData;
+    for (int y = 0; y < h; ++y)
+        memcpy(img.scanLine(y), src + (size_t)y * map.RowPitch, (size_t)w * 4);
+    m_impl->context->Unmap(m_impl->staging.Get(), 0);
+
+    out = img;
+    return true;
 }

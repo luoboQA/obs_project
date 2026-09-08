@@ -49,6 +49,11 @@ void SystemController::initialize() {
     connect(bus, &EventBus::cmd_changeAudioDevice, this, &SystemController::onChangeAudioDevice);
     connect(bus, &EventBus::cmd_uiFrameProcessed, this, &SystemController::onUiFrameProcessed);
     connect(bus, &EventBus::cmd_overlayGeometryChanged, this, &SystemController::onOverlayGeometryChanged);
+    // 图片/文字图层注册:直连同步执行(与 onOverlayGeometryChanged 直调同款模式)。
+    // 必须先于队列化的 updateOverlayImage 建好条目,否则内容更新会因条目缺失而丢失。
+    connect(bus, &EventBus::cmd_addOverlay, this, [this](int id, QRect rect){
+        if (m_capturer) m_capturer->addOverlay(id, QImage(), rect);
+    });
     connect(bus, &EventBus::cmd_toggleMicCapture, this, &SystemController::onToggleMicCapture);
 
     // 连接删除信号，并清理活动图层记录

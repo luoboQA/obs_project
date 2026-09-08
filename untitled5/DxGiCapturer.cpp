@@ -1,5 +1,6 @@
 ﻿#include "DxGiCapturer.h"
 #include "Logger.h"
+#include "EventBus.h"
 #include <d3d11.h>
 #include <QDebug>
 #include <QThread>
@@ -80,7 +81,7 @@ DxGiCapturer::~DxGiCapturer() {
 void DxGiCapturer::setPreviewEnabled(bool enabled) { m_previewEnabled = enabled; if (!enabled) m_uiInFlight = 0; }
 void DxGiCapturer::startRecording() { m_isRecordingMP4 = true; s_recordedFrameCount = 0; }
 void DxGiCapturer::stopRecording() { m_isRecordingMP4 = false; }
-void DxGiCapturer::onUiFrameProcessed() { m_uiInFlight = 0; }
+void DxGiCapturer::onUiFrameProcessed() { m_uiInFlight = 0; m_overlayUiInFlight = 0; }
 
 QStringList DxGiCapturer::getMonitorNames() {
     QStringList list;
@@ -152,12 +153,19 @@ bool DxGiCapturer::initShaders() {
     m_d3dDevice->CreateSamplerState(&sampDesc, &m_samplerState);
 
     D3D11_BLEND_DESC blendDesc = {};
+    // 【关键】所有输入的纹理像素都是 premultiplied alpha(Qt ARGB32_Premultiplied、
+    // 摄像头 BGRA Premultiplied),合成目标也是 premultiplied。混合必须用
+    //   RGB: Src=ONE, Dest=INV_SRC_ALPHA
+    //   A  : Src=ONE, Dest=INV_SRC_ALPHA
+    // 而非直通式 SRC_ALPHA —— 否则半透明像素(文字抗锯齿边缘、PNG 透明、阴影)的
+    // 颜色会被二次乘 alpha,边缘发暗发脏。Alpha 通道累加使整帧保持不透明,回读时
+    // 按 ARGB32_Premultiplied 解析才是自洽的。
     blendDesc.RenderTarget[0].BlendEnable = TRUE;
-    blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
     blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
     blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
     blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+    blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
     blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     blendDesc.RenderTarget[0].RenderTargetWriteMask = 0x0F;
     m_d3dDevice->CreateBlendState(&blendDesc, &m_blendState);
@@ -286,9 +294,10 @@ void DxGiCapturer::updateTextureFromImage(OverlayData* data) {
     if (!m_d3dDevice || data->image.isNull()) return;
 
     // Convert format to BGRA8 (WinRT/DirectX standard)
+    // 【统一】务必得到 premultiplied alpha:混合状态按 premultiplied 设计
+    // (见 initShaders),straight ARGB32 直通会导致半透明边缘混合错误。
     QImage converted = data->image;
-    if (converted.format() != QImage::Format_ARGB32_Premultiplied &&
-        converted.format() != QImage::Format_ARGB32) {
+    if (converted.format() != QImage::Format_ARGB32_Premultiplied) {
         converted = converted.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
@@ -475,9 +484,34 @@ void DxGiCapturer::startCapture() {
                 float blendFactor[] = {0,0,0,0};
                 m_d3dContext->OMSetBlendState(m_blendState.Get(), blendFactor, 0xffffffff);
 
+                // 合成目标 → CPU QImage 的回读(预览帧 / 录制帧各自按需调用)
+                auto readbackComposed = [&]() -> QImage {
+                    if (!m_stagingTexture) return QImage();
+                    m_d3dContext->CopyResource(m_stagingTexture.Get(), m_compositionTexture.Get()); m_d3dContext->Flush();
+                    D3D11_MAPPED_SUBRESOURCE mapInfo;
+                    if (FAILED(m_d3dContext->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapInfo)) || !mapInfo.pData) return QImage();
+                    QImage out;
+                    if (mapInfo.RowPitch == (UINT)m_width*4) out = QImage((uchar*)mapInfo.pData, m_width, m_height, QImage::Format_ARGB32_Premultiplied).copy();
+                    else {
+                        out = QImage(m_width, m_height, QImage::Format_ARGB32_Premultiplied);
+                        for (int y=0; y<m_height; ++y) memcpy(out.bits() + y*m_width*4, (uchar*)mapInfo.pData + y*mapInfo.RowPitch, m_width*4);
+                    }
+                    m_d3dContext->Unmap(m_stagingTexture.Get(), 0);
+                    return out;
+                };
+
                 // 1. Draw Background (Desktop/Window Capture)
                 if (m_cachedSRV) {
                     renderTexture(m_cachedSRV.Get(), QRect(0, 0, m_width, m_height), true);
+                }
+
+                // 1b. 【预览】回读“纯背景 + 尚未绘制任何 overlay”的合成目标。
+                // 各图层内容由 UI 端 ResizablePixmapItem 单独绘制 —— 若预览帧
+                // 也烘烤图层,文字等半透明图层在 UI 里会被“烘焙副本 + item”双重
+                // 合成:抗锯齿边缘发暗发脏、两份栅格化错位抖动、半透明处透出重影。
+                if (m_previewEnabled && m_uiInFlight == 0) {
+                    QImage previewFrame = readbackComposed();
+                    if (!previewFrame.isNull()) { m_uiInFlight = 1; emit frameCapturedForPreview(previewFrame); }
                 }
 
                 // 2. Process Updates (Removals/Texture Uploads)
@@ -507,20 +541,48 @@ void DxGiCapturer::startCapture() {
                     }
                 }
 
-                if (m_stagingTexture) {
-                    m_d3dContext->CopyResource(m_stagingTexture.Get(), m_compositionTexture.Get()); m_d3dContext->Flush();
-                    D3D11_MAPPED_SUBRESOURCE mapInfo;
-                    if (SUCCEEDED(m_d3dContext->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapInfo)) && mapInfo.pData) {
-                        QImage deepCopy;
-                        if (mapInfo.RowPitch == (UINT)m_width*4) deepCopy = QImage((uchar*)mapInfo.pData, m_width, m_height, QImage::Format_ARGB32_Premultiplied).copy();
-                        else {
-                            deepCopy = QImage(m_width, m_height, QImage::Format_ARGB32_Premultiplied);
-                            for (int y=0; y<m_height; ++y) memcpy(deepCopy.bits() + y*m_width*4, (uchar*)mapInfo.pData + y*mapInfo.RowPitch, m_width*4);
+                // 【UI 同步】摄像头视频推送:使摄像头图层成为带真实视频的 QGraphicsItem,
+                // 参与 Qt z 序 —— 否则摄像头视频只存在于 z=0 的背景合成帧里,任何
+                // 图片/文字 item 都会无视图层顺序盖住它(用户报告的 bug)。
+                // 门控 m_overlayUiInFlight:UI 每处理完一帧预览会复位(onUiFrameProcessed),
+                // 防止 UI 卡顿(模态框等)期间事件队列无限堆积。
+                // 轮转 m_overlayRotateIndex:每合成帧至多推送一个摄像头且起点顺移,避免
+                // 帧率高的前置摄像头饿死列表后方的摄像头。
+                // 以下在 m_dataMutex 保护下读 m_overlays/m_renderOrder(与主线程直调互斥)。
+                // 持锁发射信号仅因 data_overlayUpdate 的接收方全部为队列连接(MainWindow
+                // 跨线程 auto=queued、m_capturer 显式 QueuedConnection 且对 Camera 类型
+                // no-op);若未来添加同线程直接连接会自锁死。
+                {
+                    QMutexLocker locker(&m_dataMutex);
+                    if (m_overlayUiInFlight == 0) {
+                        const int n = m_renderOrder.size();
+                        for (int k = 0; k < n; ++k) {
+                            int idx = (m_overlayRotateIndex + k) % n;
+                            auto it = m_overlays.find(m_renderOrder[idx]);
+                            if (it == m_overlays.end()) continue;
+                            OverlayData* data = it.value();
+                            if (data->type != OverlayType::Camera || !data->camera) continue;
+                            if (data->rect.isEmpty()) continue; // 与绘制分支同样的可见性条件
+                            int fc = data->camera->frameCount();
+                            if (fc == data->lastPushedCamFrame) continue; // 无新帧
+                            QImage camFrame;
+                            if (!data->camera->readLatestFrame(camFrame) || camFrame.isNull()) continue;
+                            data->lastPushedCamFrame = fc;
+                            m_overlayRotateIndex = (idx + 1) % n;
+                            m_overlayUiInFlight = 1;
+                            EventBus::instance()->fireOverlayUpdate(data->id, camFrame);
+                            break; // 每合成帧至多推送一个摄像头
                         }
-                        m_d3dContext->Unmap(m_stagingTexture.Get(), 0);
-                        if (m_isRecordingMP4) { emit frameCaptured(deepCopy, (qint64)(s_recordedFrameCount * 1000.0 / TARGET_FPS)); s_recordedFrameCount++; }
-                        if (m_previewEnabled && m_uiInFlight == 0) { m_uiInFlight = 1; emit frameCapturedForPreview(deepCopy); }
-                        if (m_snapshotRequested.exchange(0) == 1) emit snapshotCaptured(deepCopy);
+                    }
+                }
+
+                // 3b. 【录制/快照】需要包含全部 overlay 的完整合成帧;仅在确实
+                // 需要时才回读(不录制也不截图时跳过,省一次全帧 GPU→CPU 拷贝)。
+                if (m_isRecordingMP4 || m_snapshotRequested.load() == 1) {
+                    QImage outFrame = readbackComposed();
+                    if (!outFrame.isNull()) {
+                        if (m_isRecordingMP4) { emit frameCaptured(outFrame, (qint64)(s_recordedFrameCount * 1000.0 / TARGET_FPS)); s_recordedFrameCount++; }
+                        if (m_snapshotRequested.exchange(0) == 1) emit snapshotCaptured(outFrame);
                     }
                 }
             }

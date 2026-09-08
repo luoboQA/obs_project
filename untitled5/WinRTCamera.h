@@ -13,6 +13,7 @@
 #include <atomic>
 #include <memory>
 #include <QString>
+#include <QImage>
 
 using namespace Microsoft::WRL;
 using namespace winrt::Windows::Media::Capture;
@@ -30,6 +31,12 @@ public:
     void stop();
 
     ComPtr<ID3D11ShaderResourceView> getLatestFrame();
+
+    // 把最新一帧拷回 CPU 端为 QImage(BGRA8 premultiplied → ARGB32 premultiplied,
+    // 小端字节序一致)。供 UI 预览图层实时显示摄像头视频,使摄像头参与 Qt z 序。
+    // 全程持 impl->mutex,与 FrameArrived 上传回调互斥;摄像头已停止/无帧时返回 false。
+    bool readLatestFrame(QImage& out);
+    int frameCount() const { return m_impl->frameCount.load(std::memory_order_relaxed); }
 
     QString getDeviceId() const { return m_currentDeviceId; }
     bool isRunning() const { return m_impl->running; }
@@ -52,7 +59,8 @@ private:
         ComPtr<ID3D11DeviceContext> context;
         ComPtr<ID3D11Texture2D> copyTexture;
         ComPtr<ID3D11ShaderResourceView> currentSRV;
-        std::atomic<int> frameCount{ 0 };   // 调试计数器
+        ComPtr<ID3D11Texture2D> staging;    // CPU 可读回放纹理(readLatestFrame 用,按需创建)
+        std::atomic<int> frameCount{ 0 };   // 已成功上传的帧计数(内容就绪信号)
     };
     std::shared_ptr<Impl> m_impl = std::make_shared<Impl>();
 

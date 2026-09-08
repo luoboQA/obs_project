@@ -211,8 +211,13 @@ void MainWindow::onBtnAddSourceClicked() {
                 // 双击图片 → 弹出选图对话框进行原位替换（仅图片源连接，摄像头不响应）
                 connect(item, &ResizablePixmapItem::doubleClicked, this, &MainWindow::onReplaceImageRequested);
 
-                // 创建时必须立即发送几何信息和像素数据
-                EventBus::instance()->sendOverlayGeometryChanged(id, QRect(50, 50, pix.width(), pix.height()));
+                // 创建时必须立即发送几何信息和像素数据。
+                // addOverlay 必须先注册(直连同步执行),随后的队列内容更新才能命中条目;
+                // rect 用场景坐标(pos + 本地尺寸),与后续几何消息一致,避免注册前几何
+                // 直调 no-op 造成位置丢失。
+                QRect sceneRect = QRect(item->pos().toPoint(), item->getImageRect().size().toSize());
+                EventBus::instance()->sendCommandAddOverlay(id, sceneRect);
+                EventBus::instance()->sendOverlayGeometryChanged(id, sceneRect);
                 EventBus::instance()->fireOverlayUpdate(id, pix.toImage());
             }
         }
@@ -233,9 +238,12 @@ void MainWindow::onBtnAddSourceClicked() {
                 EventBus::instance()->fireOverlayUpdate(id, img);
             });
 
-            // 创建时立即发送
-            QRectF r = item->getImageRect();
-            EventBus::instance()->sendOverlayGeometryChanged(id, r.toRect());
+            // 创建时立即发送(先注册后端条目,再发几何与像素内容,见图片分支注释)。
+            // rect 用场景坐标:原实现误用本地 r.toRect()(0,0,w,h),此前后端不渲染
+            // 文字所以未暴露;现在必须与 UI 位置一致,否则录制中文字会画在左上角。
+            QRect sceneRect = QRect(item->pos().toPoint(), item->getImageRect().size().toSize());
+            EventBus::instance()->sendCommandAddOverlay(id, sceneRect);
+            EventBus::instance()->sendOverlayGeometryChanged(id, sceneRect);
             EventBus::instance()->fireOverlayUpdate(id, item->getPixmap().toImage());
         }
 
@@ -291,7 +299,8 @@ void MainWindow::onCameraAdded(int id, QRect rect) {
 
     ResizablePixmapItem *item = new ResizablePixmapItem(placeholder, id);
     item->setPos(rect.topLeft());
-    item->setZValue(100);
+    // 不再固定置顶:z 由 updateZOrder() 按图层列表统一管理(10 + i),
+    // 使摄像头视频(经读回推送实时更新到此 item)参与图层渲染顺序。
     m_scene->addItem(item);
     m_overlayItems.insert(id, item);
 

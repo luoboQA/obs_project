@@ -35,6 +35,7 @@ struct OverlayData {
     bool textureDirty = false; // 标记是否需要上传到GPU
     ID3D11Texture2D* texture = nullptr;
     ID3D11ShaderResourceView* srv = nullptr;
+    int lastPushedCamFrame = -1; // 已推送到 UI 的摄像头帧计数(readLatestFrame 去重用)
 };
 
 class DxGiCapturer : public QObject
@@ -96,6 +97,10 @@ private:
     std::atomic<bool> m_previewEnabled{true};
     std::atomic<bool> m_isRecordingMP4{false};
     std::atomic<int> m_uiInFlight{0};
+    // 摄像头帧→UI 的节奏门控(镜像 m_uiInFlight):置位后直到 UI 处理完一帧预览
+    // 才允许推送下一帧,避免 UI 卡顿(模态框等)期间事件队列无限堆积。
+    std::atomic<int> m_overlayUiInFlight{0};
+    int m_overlayRotateIndex = 0; // 摄像头推送轮转起点(仅采集线程访问,防多摄像头饿死)
 
     QMutex m_targetMutex;
     CaptureTarget m_currentTarget;
