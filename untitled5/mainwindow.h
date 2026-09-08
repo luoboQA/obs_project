@@ -30,9 +30,7 @@ private slots:
     void onBtnRecordClicked();
     void onBtnSettingsClicked();
     void onBtnRefreshClicked();
-    void onBtnAddCamClicked();
     void onBtnSnapshotClicked();
-    void onBtnLoadImageClicked();
     void onChkMixMicToggled(bool checked);
 
     void onSourceComboChanged(int index);

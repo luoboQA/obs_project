@@ -452,5 +452,3 @@ void MainWindow::onSourceListUpdated(QList<QPair<QString, QVariant>> sources) { 
 void MainWindow::onAudioDeviceListUpdated(bool isMic, QStringList names, QStringList ids) { QComboBox* box=isMic?m_comboMic:m_comboSysAudio; box->blockSignals(true); box->clear(); for(int i=0;i<names.size();++i) box->addItem(names[i], ids[i]); box->blockSignals(false); }
 void MainWindow::onSnapshotTaken(QString path) { QMessageBox::information(this, "Snap", "Saved: "+path); }
 void MainWindow::onError(QString msg) { QMessageBox::critical(this, "Error", msg); }
-void MainWindow::onBtnLoadImageClicked() {}
-void MainWindow::onBtnAddCamClicked() {}
